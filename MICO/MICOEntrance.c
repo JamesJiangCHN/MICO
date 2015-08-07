@@ -230,6 +230,32 @@ void micoNotify_StackOverflowErrHandler(char *taskname, mico_Context_t * const i
   MicoSystemReboot(); 
 }
 
+void wtConnectToAP( mico_Context_t * const inContext)
+{
+  mico_log_trace();
+  network_InitTypeDef_adv_st wNetConfig;
+  mico_log("connect to %s.....", inContext->flashContentInRam.micoSystemConfig.ssid);
+  memset(&wNetConfig, 0x0, sizeof(network_InitTypeDef_adv_st));
+  
+  
+   
+  mico_rtos_lock_mutex(&inContext->flashContentInRam_mutex);
+  strncpy((char*)wNetConfig.ap_info.ssid, inContext->flashContentInRam.micoSystemConfig.ssid, maxSsidLen);
+  wNetConfig.ap_info.security = SECURITY_TYPE_AUTO;
+  memcpy(wNetConfig.key, inContext->flashContentInRam.micoSystemConfig.user_key, maxKeyLen);
+  wNetConfig.key_len = inContext->flashContentInRam.micoSystemConfig.user_keyLength;
+  wNetConfig.dhcpMode = DHCP_Client;
+  strncpy((char*)wNetConfig.local_ip_addr, inContext->flashContentInRam.micoSystemConfig.localIp, maxIpLen);
+  strncpy((char*)wNetConfig.net_mask, inContext->flashContentInRam.micoSystemConfig.netMask, maxIpLen);
+  strncpy((char*)wNetConfig.gateway_ip_addr, inContext->flashContentInRam.micoSystemConfig.gateWay, maxIpLen);
+  strncpy((char*)wNetConfig.dnsServer_ip_addr, inContext->flashContentInRam.micoSystemConfig.dnsServer, maxIpLen);
+
+  wNetConfig.wifi_retry_interval = 100;
+  mico_rtos_unlock_mutex(&inContext->flashContentInRam_mutex);
+  micoWlanStartAdv(&wNetConfig);
+  
+}
+
 void _ConnectToAP( mico_Context_t * const inContext)
 {
   mico_log_trace();
@@ -347,6 +373,29 @@ int application_start(void)
   /* Regisist notifications */
   err = MICOAddNotification( mico_notify_WIFI_STATUS_CHANGED, (void *)micoNotify_WifiStatusHandler );
   require_noerr( err, exit ); 
+ /*****/
+  if(context->flashContentInRam.micoSystemConfig.configured == wLanUnConfigured
+      || context->flashContentInRam.micoSystemConfig.configured == unConfigured
+          || strlen(context->flashContentInRam.micoSystemConfig.ssid) < 2)
+  {
+    char wtssid[15] = "WT_WL_2200"; 
+    char wtkey[15] = "windit2200";
+    if(strlen(context->flashContentInRam.appConfig.remoteServerDomain) < 7)
+    {
+        strncpy(context->flashContentInRam.appConfig.remoteServerDomain, "10.100.0.7",64);
+        context->flashContentInRam.appConfig.remoteServerPort = 80;
+    }
+    strncpy(context->flashContentInRam.micoSystemConfig.ssid, wtssid, maxSsidLen);
+    //strncpy(context->flashContentInRam.micoSystemConfig.key, wtkey, maxKeyLen);
+    strncpy(context->flashContentInRam.micoSystemConfig.user_key, wtkey, maxKeyLen);
+    context->flashContentInRam.micoSystemConfig.user_keyLength = strlen(wtkey);
+    context->flashContentInRam.micoSystemConfig.dhcpEnable = DHCP_Client;
+    context->flashContentInRam.micoSystemConfig.security = SECURITY_TYPE_AUTO;
+    context->flashContentInRam.micoSystemConfig.configured = allConfigured;
+    MICOUpdateConfiguration(context);
+  }
+  
+  /*****/
 
   if( context->flashContentInRam.micoSystemConfig.configured == wLanUnConfigured ||
       context->flashContentInRam.micoSystemConfig.configured == unConfigured){
@@ -402,7 +451,41 @@ int application_start(void)
     mico_thread_sleep(MICO_NEVER_TIMEOUT);
   }
 #endif
+  // new add
+  else if(context->flashContentInRam.micoSystemConfig.configured == allConfigured)
+  {
+    mico_log("Available configuration. Starting Wi-Fi connection...");
+    
+    err = MICOAddNotification( mico_notify_WiFI_PARA_CHANGED, (void *)micoNotify_WiFIParaChangedHandler );
+    require_noerr( err, exit ); 
 
+    err = MICOAddNotification( mico_notify_DHCP_COMPLETED, (void *)micoNotify_DHCPCompleteHandler );
+    require_noerr( err, exit );  
+   
+    if(context->flashContentInRam.micoSystemConfig.rfPowerSaveEnable == true){
+      micoWlanEnablePowerSave();
+    }
+
+    if(context->flashContentInRam.micoSystemConfig.mcuPowerSaveEnable == true){
+      MicoMcuPowerSaveConfig(true);
+    }
+
+    //Local configuration server
+    if(context->flashContentInRam.micoSystemConfig.configServerEnable == true){
+      err =  MICOStartConfigServer(context);
+      require_noerr_action( err, exit, mico_log("ERROR: Unable to start the local server thread.") );
+    }
+
+    err =  MICOStartNTPClient(context);
+    require_noerr_action( err, exit, mico_log("ERROR: Unable to start the NTP client thread.") );
+
+    //Start mico application
+    err = MICOStartApplication( context );
+    require_noerr( err, exit );
+
+    wtConnectToAP( context );
+  
+  }
   else{
     mico_log("Available configuration. Starting Wi-Fi connection...");
     
